@@ -7,6 +7,8 @@
   var MESSAGE_SESSION = 'english-lab-shadow-session';
   var MESSAGE_NAVIGATE = 'english-lab-shadow-navigate';
   var MESSAGE_FINISH = 'english-lab-shadow-finish';
+  var MESSAGE_LOOKUP = 'english-lab-shadow-pronunciation-lookup';
+  var MESSAGE_PRONUNCIATIONS = 'english-lab-shadow-pronunciations';
   var params = new URLSearchParams(location.hash.replace(/^#/, ''));
   var session = params.get('session') || '';
   var returnOrigin = validOrigin(params.get('returnOrigin'));
@@ -16,6 +18,11 @@
   var recognitionFinished = false;
   var results = {};
   var passed = {};
+  var pronunciations = {};
+  var requestedWords = {};
+  var pronunciationRequest = 0;
+  var pronunciationBatches = {};
+  var pronunciationAudio = null;
   var slow = false;
   var hiddenText = false;
   var player = null;
@@ -53,6 +60,7 @@
     score: document.getElementById('scoreValue'),
     scoreTitle: document.getElementById('scoreTitle'),
     words: document.getElementById('wordResult'),
+    mistakeHint: document.getElementById('mistakeHint'),
     heard: document.getElementById('heardText'),
     retry: document.getElementById('retryButton'),
     nextResult: document.getElementById('nextResultButton'),
@@ -113,11 +121,25 @@
     }).filter(function (line) { return words(line.text).length >= 2; });
     if (!lines.length) return null;
     var videoId = /^[A-Za-z0-9_-]{11}$/.test(String(raw.videoId || '')) ? String(raw.videoId) : '';
+    var pronunciationMap = {};
+    Object.keys(raw.pronunciations || {}).slice(0, 300).forEach(function (key) {
+      var normalized = String(key || '').toLowerCase().trim();
+      var value = raw.pronunciations[key];
+      if (!normalized || !value) return;
+      pronunciationMap[normalized] = typeof value === 'string'
+        ? { ipa: value, audio: '', source: 'vocab' }
+        : {
+            ipa: String(value.ipa || '').trim().slice(0, 200),
+            audio: String(value.audio || '').trim().slice(0, 1000),
+            source: String(value.source || 'vocab').slice(0, 30)
+          };
+    });
     return {
       id: String(raw.id || '').slice(0, 200),
       topic: String(raw.topic || 'Shadowing').slice(0, 300),
       videoId: videoId,
       startIndex: Math.max(0, Math.min(lines.length - 1, Number(raw.startIndex) || 0)),
+      pronunciations: pronunciationMap,
       lines: lines
     };
   }
@@ -132,17 +154,133 @@
     return lesson && lesson.lines[currentIndex] ? lesson.lines[currentIndex] : null;
   }
 
-  function renderWords(flags) {
-    var line = currentLine();
-    var flagIndex = 0;
-    el.words.textContent = '';
-    line.text.split(/\s+/).forEach(function (word, index, list) {
-      var span = document.createElement('span');
-      var isWord = words(word).length > 0;
-      span.className = !isWord || flags[flagIndex++] ? 'ok' : 'miss';
-      span.textContent = word + (index < list.length - 1 ? ' ' : '');
-      el.words.appendChild(span);
+  function buildWordSegments(flags) {
+    var tokens = currentLine().text.split(/\s+/);
+    var segments = [], activeMiss = null, flagIndex = 0;
+    tokens.forEach(function (raw) {
+      var normalized = words(raw);
+      var tokenFlags = flags.slice(flagIndex, flagIndex + normalized.length);
+      flagIndex += normalized.length;
+      var correct = !normalized.length || tokenFlags.every(Boolean);
+      if (correct) {
+        activeMiss = null;
+        segments.push({ correct: true, label: raw });
+        return;
+      }
+      if (!activeMiss) {
+        activeMiss = { correct: false, labels: [], words: [] };
+        segments.push(activeMiss);
+      }
+      activeMiss.labels.push(raw);
+      activeMiss.words = activeMiss.words.concat(normalized);
     });
+    return segments.map(function (segment) {
+      if (segment.correct) return segment;
+      segment.label = segment.labels.join(' ');
+      segment.key = segment.words.join(' ');
+      return segment;
+    });
+  }
+
+  function stripIpa(value) {
+    return String(value || '').trim().replace(/^\/+|\/+$/g, '').trim();
+  }
+
+  function pronunciationFor(segment) {
+    var direct = pronunciations[segment.key];
+    if (direct && direct.ipa) return direct;
+    var entries = segment.words.map(function (word) { return pronunciations[word]; });
+    if (entries.length && entries.every(function (entry) { return entry && entry.ipa; })) {
+      return {
+        ipa: '/' + entries.map(function (entry) { return stripIpa(entry.ipa); }).join(' ') + '/',
+        audio: entries.length === 1 ? entries[0].audio : '',
+        source: entries.some(function (entry) { return entry.source === 'ai'; }) ? 'ai' : 'dictionary'
+      };
+    }
+    return null;
+  }
+
+  function playMistake(segment) {
+    stopAudio();
+    var pronunciation = pronunciationFor(segment);
+    var audioUrl = pronunciation && String(pronunciation.audio || '');
+    if (audioUrl) {
+      audioUrl = audioUrl.indexOf('//') === 0 ? 'https:' + audioUrl : audioUrl.replace(/^http:/, 'https:');
+      try {
+        pronunciationAudio = new Audio(audioUrl);
+        pronunciationAudio.addEventListener('error', function () { speakPhrase(segment.label); }, { once: true });
+        var started = pronunciationAudio.play();
+        if (started && typeof started.catch === 'function') started.catch(function () { speakPhrase(segment.label); });
+        return;
+      } catch (e) {}
+    }
+    speakPhrase(segment.label);
+  }
+
+  function speakPhrase(text) {
+    if (!window.speechSynthesis) return;
+    var utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US'; utterance.rate = .78;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function requestMissingPronunciations(segments) {
+    var missing = [];
+    segments.filter(function (segment) { return !segment.correct; }).forEach(function (segment) {
+      segment.words.forEach(function (word) {
+        var pronunciation = pronunciations[word];
+        if ((!pronunciation || !pronunciation.ipa || !pronunciation.audio) &&
+            !requestedWords[word] && missing.indexOf(word) === -1) missing.push(word);
+      });
+    });
+    missing = missing.slice(0, 16);
+    if (!missing.length) return;
+    missing.forEach(function (word) { requestedWords[word] = 'pending'; });
+    pronunciationRequest++;
+    var requestId = String(pronunciationRequest);
+    pronunciationBatches[requestId] = missing;
+    if (!sendToGas({ type: MESSAGE_LOOKUP, requestId: requestId, words: missing })) {
+      missing.forEach(function (word) { requestedWords[word] = 'done'; });
+    }
+  }
+
+  function renderWords(result) {
+    result.segments = result.segments || buildWordSegments(result.flags);
+    requestMissingPronunciations(result.segments);
+    var hasMistakes = false;
+    el.words.textContent = '';
+    result.segments.forEach(function (segment, index, list) {
+      if (segment.correct) {
+        var span = document.createElement('span');
+        span.className = 'ok';
+        span.textContent = segment.label + (index < list.length - 1 ? ' ' : '');
+        el.words.appendChild(span);
+        return;
+      }
+      hasMistakes = true;
+      var pronunciation = pronunciationFor(segment);
+      var button = document.createElement('button');
+      var label = document.createElement('span');
+      var ipa = document.createElement('small');
+      var waiting = segment.words.some(function (word) { return requestedWords[word] === 'pending'; });
+      button.type = 'button';
+      button.className = 'mistake-token' + (waiting ? ' loading' : '');
+      button.title = 'Nghe phát âm: ' + segment.label;
+      button.setAttribute('aria-label', 'Nghe phát âm ' + segment.label + (pronunciation && pronunciation.ipa ? ', ' + pronunciation.ipa : ''));
+      label.textContent = segment.label;
+      ipa.textContent = pronunciation && pronunciation.ipa
+        ? pronunciation.ipa + (pronunciation.source === 'ai' ? ' · AI' : '')
+        : waiting ? 'Đang lấy IPA…' : 'Chưa có IPA';
+      if (pronunciation && pronunciation.source === 'ai') {
+        ipa.title = 'IPA tham khảo do AI bổ sung';
+      }
+      button.appendChild(label); button.appendChild(ipa);
+      button.addEventListener('click', function () { playMistake(segment); });
+      el.words.appendChild(button);
+      if (index < list.length - 1) el.words.appendChild(document.createTextNode(' '));
+    });
+    el.mistakeHint.hidden = !hasMistakes;
   }
 
   function renderResult(result) {
@@ -154,7 +292,7 @@
     el.scoreTitle.textContent = percent >= 80 ? 'Câu nói đã rõ và đủ ý' : percent >= 50 ? 'Gần đạt — sửa các từ đỏ' : 'Nghe mẫu rồi thử lại';
     el.heard.textContent = '“' + result.heard + '”';
     el.nextResult.textContent = currentIndex >= lesson.lines.length - 1 ? 'Xem kết quả phiên' : 'Câu tiếp theo';
-    renderWords(result.flags);
+    renderWords(result);
   }
 
   function setStatus(title, hint, isListening) {
@@ -268,6 +406,7 @@
     el.next.textContent = currentIndex >= lesson.lines.length - 1 ? 'Kết thúc phiên →' : 'Câu sau →';
     el.scriptCard.classList.toggle('blind', hiddenText);
     el.result.hidden = true;
+    el.mistakeHint.hidden = true;
     el.recorder.hidden = false;
     setStatus('Sẵn sàng khi bạn sẵn sàng', 'Nghe câu mẫu, sau đó bấm micro và đọc theo.', false);
     if (results[currentIndex]) renderResult(results[currentIndex]);
@@ -316,6 +455,10 @@
     clearInterval(audioPoll);
     audioPoll = null;
     if (player && player.pauseVideo) try { player.pauseVideo(); } catch (e) {}
+    if (pronunciationAudio) {
+      try { pronunciationAudio.pause(); } catch (e) {}
+      pronunciationAudio = null;
+    }
     try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) {}
   }
 
@@ -394,6 +537,9 @@
       showConnectionError('Bài học không có câu hợp lệ để luyện.');
       return;
     }
+    pronunciations = Object.assign({}, lesson.pronunciations || {});
+    requestedWords = {};
+    pronunciationBatches = {};
     clearTimeout(connectionTimer);
     currentIndex = lesson.startIndex;
     el.empty.hidden = true;
@@ -418,6 +564,23 @@
     if (data.session !== session) return;
     if (data.type === MESSAGE_SESSION) {
       startLesson(data.lesson);
+      return;
+    }
+    if (data.type === MESSAGE_PRONUNCIATIONS) {
+      var requestId = String(data.requestId || '');
+      var batch = pronunciationBatches[requestId] || [];
+      batch.forEach(function (word) { requestedWords[word] = 'done'; });
+      delete pronunciationBatches[requestId];
+      (Array.isArray(data.items) ? data.items : []).slice(0, 16).forEach(function (item) {
+        var word = String(item && item.word || '').toLowerCase().trim();
+        if (!/^[a-z][a-z'-]{0,39}$/.test(word)) return;
+        pronunciations[word] = {
+          ipa: String(item.ipa || '').trim().slice(0, 200),
+          audio: String(item.audio || '').trim().slice(0, 1000),
+          source: String(item.source || 'dictionary').slice(0, 30)
+        };
+      });
+      if (results[currentIndex] && !el.result.hidden) renderResult(results[currentIndex]);
       return;
     }
     if (data.type === MESSAGE_ACCEPTED && results[data.index]) {
