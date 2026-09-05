@@ -4,10 +4,10 @@ Trang luyện nói độc lập cho web app English Lab trên Google Apps Script
 
 ## Luồng hoạt động
 
-1. English Lab mở trang này bằng `window.open()` và truyền câu luyện trong URL fragment.
-2. Trang yêu cầu quyền micro ở top-level HTTPS và dùng Web Speech API để nhận dạng tiếng Anh.
-3. Kết quả transcript được gửi về đúng cửa sổ English Lab bằng `window.opener.postMessage()`.
-4. English Lab kiểm tra origin + session, tự tính lại điểm và lưu tiến độ qua `google.script.run`.
+1. English Lab mở trang này bằng `window.open()` với một session ID ngẫu nhiên.
+2. Hai cửa sổ bắt tay bằng `postMessage`; GAS gửi toàn bộ bài gồm câu, bản dịch, `videoId` và timestamp.
+3. Speaking Room chạy trọn phiên nhiều câu, phát đúng đoạn video gốc bằng YouTube IFrame API và dùng Web Speech API để nhận dạng tiếng Anh.
+4. Mỗi transcript được gửi ngầm về đúng cửa sổ English Lab. GAS kiểm tra origin + source + session, tự tính lại điểm và lưu tiến độ qua `google.script.run`.
 
 Không có API key trong frontend. Trang không tải hoặc lưu file âm thanh trên GitHub.
 
@@ -17,7 +17,7 @@ Không có API key trong frontend. Trang không tải hoặc lưu file âm thanh
 python3 -m http.server 8080
 ```
 
-Mở `http://localhost:8080/#target=How%20are%20you%20today%3F`. Micro được phép trên `localhost`; khi xuất bản phải dùng HTTPS.
+Mở `http://localhost:8080/#target=How%20are%20you%20today%3F`. Chế độ URL trực tiếp chỉ dùng để xem thử một câu; phiên đầy đủ phải được mở từ English Lab. Micro được phép trên `localhost`; khi xuất bản phải dùng HTTPS.
 
 ## Xuất bản
 

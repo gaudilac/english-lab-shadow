@@ -26,9 +26,9 @@
     </header>
 
     <section id="emptyState" class="empty-state" hidden>
-      <p class="eyebrow">Chưa có câu luyện</p>
-      <h1>Hãy mở phòng thu từ màn Shadowing.</h1>
-      <p>Trang này nhận câu luyện trực tiếp từ English Lab và không lưu nội dung trên GitHub.</p>
+      <p id="emptyEyebrow" class="eyebrow">Đang kết nối</p>
+      <h1 id="emptyTitle">Đang nhận bài học từ English Lab…</h1>
+      <p id="emptyHint">Giữ tab English Lab mở trong lúc luyện để đồng bộ tiến độ.</p>
     </section>
 
     <section id="practiceState" class="practice" hidden>
@@ -36,15 +36,25 @@
         <span id="lessonLabel">Shadowing</span>
         <span id="progressLabel">Câu luyện</span>
       </div>
+      <div class="session-progress" aria-hidden="true"><span id="progressFill"></span></div>
+
+      <section id="videoStage" class="video-stage" hidden>
+        <div id="ytPlayer"></div>
+        <div class="source-badge"><i></i> Audio gốc từ bài học</div>
+      </section>
 
       <article class="script-card">
         <p class="eyebrow">Đọc theo câu này</p>
         <h1 id="targetText"></h1>
         <p id="translationText" class="translation" hidden></p>
-        <button id="sampleButton" class="text-button" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Zm4.5 3.5a5 5 0 0 1 0 7"/></svg>
-          Nghe giọng mẫu
-        </button>
+        <div class="sample-controls">
+          <button id="sampleButton" class="text-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Zm4.5 3.5a5 5 0 0 1 0 7"/></svg>
+            <span id="sampleLabel">Nghe audio gốc</span>
+          </button>
+          <button id="speedButton" class="chip-button" type="button" aria-pressed="false">0.75×</button>
+          <button id="hideButton" class="chip-button" type="button" aria-pressed="false">Ẩn lời</button>
+        </div>
       </article>
 
       <section id="recorder" class="recorder" aria-live="polite">
@@ -79,15 +89,31 @@
         <blockquote id="heardText"></blockquote>
         <div class="actions">
           <button id="retryButton" class="button secondary" type="button">Thử lại</button>
-          <button id="sendButton" class="button primary" type="button">Gửi về English Lab</button>
+          <button id="nextResultButton" class="button primary" type="button">Câu tiếp theo</button>
         </div>
         <p id="sendStatus" class="send-status"></p>
       </section>
+
+      <nav class="line-navigation" aria-label="Điều hướng câu luyện">
+        <button id="previousButton" type="button">← Câu trước</button>
+        <button id="nextButton" type="button">Câu sau →</button>
+      </nav>
 
       <aside class="privacy-note">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
         <p><strong>Không tải file ghi âm lên GitHub.</strong> Giọng nói được dịch thành chữ bởi tính năng nhận dạng của trình duyệt; English Lab chỉ nhận transcript và tự tính lại điểm.</p>
       </aside>
+    </section>
+
+    <section id="summaryState" class="summary-state" hidden>
+      <p class="eyebrow">Phiên luyện hoàn tất</p>
+      <h1>Giọng nói tiến bộ qua từng lần lặp.</h1>
+      <div class="summary-score"><strong id="summaryPassed">0</strong><span>/<b id="summaryTotal">0</b> câu đạt</span></div>
+      <p id="summaryHint">Tiến độ đã được đồng bộ về English Lab.</p>
+      <div class="summary-actions">
+        <button id="retryMissedButton" class="button secondary" type="button">Luyện lại câu chưa đạt</button>
+        <button id="closeButton" class="button primary" type="button">Đóng phòng thu</button>
+      </div>
     </section>
   </main>
   <script src="app.js"></script>

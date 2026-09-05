@@ -1,26 +1,48 @@
 (function () {
   'use strict';
 
-  var MESSAGE_RESULT = 'english-lab-shadow-result';
   var MESSAGE_READY = 'english-lab-shadow-ready';
+  var MESSAGE_RESULT = 'english-lab-shadow-result';
   var MESSAGE_ACCEPTED = 'english-lab-shadow-accepted';
+  var MESSAGE_SESSION = 'english-lab-shadow-session';
+  var MESSAGE_NAVIGATE = 'english-lab-shadow-navigate';
+  var MESSAGE_FINISH = 'english-lab-shadow-finish';
   var params = new URLSearchParams(location.hash.replace(/^#/, ''));
   var session = params.get('session') || '';
-  var target = params.get('target') || '';
-  var translation = params.get('translation') || '';
   var returnOrigin = validOrigin(params.get('returnOrigin'));
+  var lesson = null;
+  var currentIndex = 0;
   var recognition = null;
-  var currentResult = null;
-  var finished = false;
+  var recognitionFinished = false;
+  var results = {};
+  var passed = {};
+  var slow = false;
+  var hiddenText = false;
+  var player = null;
+  var playerReady = false;
+  var playerFailed = false;
+  var audioPoll = null;
+  var advanceTimer = null;
+  var connectionTimer = null;
 
   var el = {
     empty: document.getElementById('emptyState'),
+    emptyEyebrow: document.getElementById('emptyEyebrow'),
+    emptyTitle: document.getElementById('emptyTitle'),
+    emptyHint: document.getElementById('emptyHint'),
     practice: document.getElementById('practiceState'),
+    summary: document.getElementById('summaryState'),
     lesson: document.getElementById('lessonLabel'),
     progress: document.getElementById('progressLabel'),
+    progressFill: document.getElementById('progressFill'),
+    videoStage: document.getElementById('videoStage'),
     target: document.getElementById('targetText'),
     translation: document.getElementById('translationText'),
+    scriptCard: document.querySelector('.script-card'),
     sample: document.getElementById('sampleButton'),
+    sampleLabel: document.getElementById('sampleLabel'),
+    speed: document.getElementById('speedButton'),
+    hide: document.getElementById('hideButton'),
     recorder: document.getElementById('recorder'),
     statusTitle: document.getElementById('statusTitle'),
     statusHint: document.getElementById('statusHint'),
@@ -33,8 +55,15 @@
     words: document.getElementById('wordResult'),
     heard: document.getElementById('heardText'),
     retry: document.getElementById('retryButton'),
-    send: document.getElementById('sendButton'),
-    sendStatus: document.getElementById('sendStatus')
+    nextResult: document.getElementById('nextResultButton'),
+    sendStatus: document.getElementById('sendStatus'),
+    previous: document.getElementById('previousButton'),
+    next: document.getElementById('nextButton'),
+    summaryPassed: document.getElementById('summaryPassed'),
+    summaryTotal: document.getElementById('summaryTotal'),
+    summaryHint: document.getElementById('summaryHint'),
+    retryMissed: document.getElementById('retryMissedButton'),
+    close: document.getElementById('closeButton')
   };
 
   function validOrigin(value) {
@@ -71,31 +100,60 @@
     return { score: targetWords.length ? correct / targetWords.length : 0, flags: flags };
   }
 
+  function safeLesson(raw) {
+    if (!raw || !Array.isArray(raw.lines)) return null;
+    var lines = raw.lines.slice(0, 500).map(function (line) {
+      var text = String(line && line.text || '').trim().slice(0, 2000);
+      return {
+        text: text,
+        vi: String(line && line.vi || '').trim().slice(0, 2000),
+        t: line && line.t != null && isFinite(Number(line.t)) ? Math.max(0, Number(line.t)) : null,
+        end: line && line.end != null && isFinite(Number(line.end)) ? Math.max(0, Number(line.end)) : null
+      };
+    }).filter(function (line) { return words(line.text).length >= 2; });
+    if (!lines.length) return null;
+    var videoId = /^[A-Za-z0-9_-]{11}$/.test(String(raw.videoId || '')) ? String(raw.videoId) : '';
+    return {
+      id: String(raw.id || '').slice(0, 200),
+      topic: String(raw.topic || 'Shadowing').slice(0, 300),
+      videoId: videoId,
+      startIndex: Math.max(0, Math.min(lines.length - 1, Number(raw.startIndex) || 0)),
+      lines: lines
+    };
+  }
+
+  function sendToGas(message) {
+    if (!window.opener || window.opener.closed || !returnOrigin || !session) return false;
+    window.opener.postMessage(Object.assign({ session: session, version: 2 }, message), returnOrigin);
+    return true;
+  }
+
+  function currentLine() {
+    return lesson && lesson.lines[currentIndex] ? lesson.lines[currentIndex] : null;
+  }
+
   function renderWords(flags) {
+    var line = currentLine();
     var flagIndex = 0;
     el.words.textContent = '';
-    target.split(/\s+/).forEach(function (word, index, list) {
+    line.text.split(/\s+/).forEach(function (word, index, list) {
       var span = document.createElement('span');
       var isWord = words(word).length > 0;
-      span.className = isWord && flags[flagIndex++] ? 'ok' : 'miss';
+      span.className = !isWord || flags[flagIndex++] ? 'ok' : 'miss';
       span.textContent = word + (index < list.length - 1 ? ' ' : '');
       el.words.appendChild(span);
     });
   }
 
-  function showResult(heard) {
-    var result = compare(target, heard);
+  function renderResult(result) {
     var percent = Math.round(result.score * 100);
-    currentResult = { heard: heard, score: result.score };
-    finished = true;
-    el.recorder.classList.remove('listening');
     el.recorder.hidden = true;
     el.result.hidden = false;
     el.dial.style.setProperty('--score', percent);
     el.score.textContent = percent;
     el.scoreTitle.textContent = percent >= 80 ? 'Câu nói đã rõ và đủ ý' : percent >= 50 ? 'Gần đạt — sửa các từ đỏ' : 'Nghe mẫu rồi thử lại';
-    el.heard.textContent = '“' + heard + '”';
-    el.sendStatus.textContent = '';
+    el.heard.textContent = '“' + result.heard + '”';
+    el.nextResult.textContent = currentIndex >= lesson.lines.length - 1 ? 'Xem kết quả phiên' : 'Câu tiếp theo';
     renderWords(result.flags);
   }
 
@@ -117,6 +175,14 @@
     return messages[code] || 'Không thể nhận dạng giọng nói lúc này. Hãy thử lại.';
   }
 
+  function stopRecognition() {
+    if (!recognition) return;
+    recognitionFinished = true;
+    try { recognition.abort(); } catch (e) {}
+    recognition = null;
+    el.recorder.classList.remove('listening');
+  }
+
   function startRecognition() {
     var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!window.isSecureContext) {
@@ -132,10 +198,10 @@
       try { recognition.stop(); } catch (e) {}
       return;
     }
-
-    finished = false;
+    stopAudio();
+    recognitionFinished = false;
     recognition = new SpeechRecognition();
-    recognition.lang = params.get('lang') || 'en-US';
+    recognition.lang = 'en-US';
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
@@ -148,12 +214,12 @@
       if (heard) showResult(heard);
     };
     recognition.onerror = function (event) {
-      finished = true;
+      recognitionFinished = true;
       setStatus('Chưa ghi nhận được câu nói', errorMessage(event.error), false);
     };
     recognition.onend = function () {
       recognition = null;
-      if (!finished) setStatus('Chưa nghe trọn câu', 'Bấm micro và đọc lại một lần nữa.', false);
+      if (!recognitionFinished) setStatus('Chưa nghe trọn câu', 'Bấm micro và đọc lại một lần nữa.', false);
     };
     try {
       recognition.start();
@@ -163,75 +229,245 @@
     }
   }
 
+  function showResult(heard) {
+    var result = compare(currentLine().text, heard);
+    result.heard = heard;
+    recognitionFinished = true;
+    results[currentIndex] = result;
+    if (result.score >= .8) passed[currentIndex] = true;
+    el.recorder.classList.remove('listening');
+    el.sendStatus.textContent = sendToGas({ type: MESSAGE_RESULT, index: currentIndex, heard: heard, clientScore: result.score, createdAt: Date.now() })
+      ? 'Đang đồng bộ tiến độ với English Lab…' : 'Kết quả đang được giữ trong phiên này.';
+    renderResult(result);
+    if (result.score >= .8) {
+      clearTimeout(advanceTimer);
+      advanceTimer = setTimeout(nextLine, 1300);
+    }
+  }
+
   function retry() {
-    currentResult = null;
-    finished = false;
+    clearTimeout(advanceTimer);
     el.result.hidden = true;
     el.recorder.hidden = false;
-    setStatus('Sẵn sàng thử lại', 'Bấm micro và đọc tự nhiên, không cần nói quá chậm.', false);
+    el.sendStatus.textContent = '';
+    setStatus('Sẵn sàng thử lại', 'Nghe lại audio gốc nếu cần, rồi đọc tự nhiên.', false);
   }
 
-  function sendResult() {
-    if (!currentResult) return;
-    if (!window.opener || window.opener.closed || !returnOrigin || !session) {
-      el.sendStatus.textContent = 'Không tìm thấy tab English Lab. Hãy quay lại tab cũ và mở phòng thu lại.';
-      return;
-    }
-    el.send.disabled = true;
-    el.sendStatus.textContent = 'Đang gửi kết quả…';
-    window.opener.postMessage({
-      type: MESSAGE_RESULT,
-      version: 1,
-      session: session,
-      heard: currentResult.heard,
-      clientScore: currentResult.score,
-      createdAt: Date.now()
-    }, returnOrigin);
-    window.setTimeout(function () {
-      if (!el.sendStatus.textContent.includes('đã nhận')) {
-        el.send.disabled = false;
-        el.sendStatus.textContent = 'Chưa thấy English Lab phản hồi. Giữ tab này và quay lại tab English Lab để kiểm tra.';
-      }
-    }, 3500);
+  function renderLine() {
+    var line = currentLine();
+    clearTimeout(advanceTimer);
+    stopRecognition();
+    stopAudio();
+    el.lesson.textContent = lesson.topic;
+    el.progress.textContent = 'Câu ' + (currentIndex + 1) + ' / ' + lesson.lines.length;
+    el.progressFill.style.width = ((currentIndex + 1) / lesson.lines.length * 100) + '%';
+    el.target.textContent = line.text;
+    el.translation.textContent = line.vi;
+    el.translation.hidden = !line.vi;
+    el.previous.disabled = currentIndex === 0;
+    el.next.textContent = currentIndex >= lesson.lines.length - 1 ? 'Kết thúc phiên →' : 'Câu sau →';
+    el.scriptCard.classList.toggle('blind', hiddenText);
+    el.result.hidden = true;
+    el.recorder.hidden = false;
+    setStatus('Sẵn sàng khi bạn sẵn sàng', 'Nghe câu mẫu, sau đó bấm micro và đọc theo.', false);
+    if (results[currentIndex]) renderResult(results[currentIndex]);
+    sendToGas({ type: MESSAGE_NAVIGATE, index: currentIndex });
   }
 
-  function speakSample() {
-    if (!target || !window.speechSynthesis) return;
-    var utterance = new SpeechSynthesisUtterance(target);
+  function goTo(index) {
+    if (!lesson) return;
+    if (index < 0) index = 0;
+    if (index >= lesson.lines.length) { finishSession(); return; }
+    currentIndex = index;
+    renderLine();
+  }
+
+  function nextLine() { goTo(currentIndex + 1); }
+  function previousLine() { goTo(currentIndex - 1); }
+
+  function finishSession() {
+    clearTimeout(advanceTimer);
+    stopRecognition();
+    stopAudio();
+    var passedCount = Object.keys(passed).length;
+    el.practice.hidden = true;
+    el.summary.hidden = false;
+    el.summaryPassed.textContent = passedCount;
+    el.summaryTotal.textContent = lesson.lines.length;
+    el.retryMissed.hidden = passedCount >= lesson.lines.length;
+    el.summaryHint.textContent = sendToGas({ type: MESSAGE_FINISH, passed: passedCount, total: lesson.lines.length })
+      ? 'Tiến độ đã được đồng bộ về English Lab.' : 'Không tìm thấy tab English Lab; kết quả chỉ được giữ trong phiên này.';
+  }
+
+  function retryMissed() {
+    var missed = lesson.lines.findIndex(function (_, index) { return !passed[index]; });
+    if (missed < 0) missed = 0;
+    el.summary.hidden = true;
+    el.practice.hidden = false;
+    goTo(missed);
+  }
+
+  function closeRoom() {
+    sendToGas({ type: MESSAGE_FINISH, passed: Object.keys(passed).length, total: lesson ? lesson.lines.length : 0 });
+    window.close();
+  }
+
+  function stopAudio() {
+    clearInterval(audioPoll);
+    audioPoll = null;
+    if (player && player.pauseVideo) try { player.pauseVideo(); } catch (e) {}
+    try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) {}
+  }
+
+  function speakWithBrowser() {
+    if (!window.speechSynthesis) return;
+    var utterance = new SpeechSynthesisUtterance(currentLine().text);
     utterance.lang = 'en-US';
-    utterance.rate = .88;
+    utterance.rate = slow ? .68 : .92;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
   }
 
+  function playSample() {
+    var line = currentLine();
+    stopRecognition();
+    stopAudio();
+    if (!lesson.videoId || line.t == null || playerFailed) {
+      speakWithBrowser();
+      return;
+    }
+    if (!playerReady || !player) {
+      setStatus('Audio gốc đang tải…', 'Đợi một chút rồi bấm nghe lại.', false);
+      return;
+    }
+    try {
+      player.seekTo(Math.max(0, line.t - .3), true);
+      player.setPlaybackRate(slow ? .75 : 1);
+      player.playVideo();
+      if (line.end != null && line.end > line.t) {
+        audioPoll = setInterval(function () {
+          try { if (player.getCurrentTime() >= line.end) stopAudio(); }
+          catch (e) { stopAudio(); }
+        }, 160);
+      }
+    } catch (e) {
+      playerFailed = true;
+      el.videoStage.hidden = true;
+      el.sampleLabel.textContent = 'Nghe giọng trình duyệt';
+      speakWithBrowser();
+    }
+  }
+
+  function loadYouTubePlayer() {
+    if (!lesson.videoId) {
+      el.videoStage.hidden = true;
+      el.sampleLabel.textContent = 'Nghe giọng trình duyệt';
+      return;
+    }
+    el.videoStage.hidden = false;
+    window.onYouTubeIframeAPIReady = function () {
+      player = new window.YT.Player('ytPlayer', {
+        width: '580', height: '326', videoId: lesson.videoId,
+        playerVars: { playsinline: 1, controls: 1, rel: 0, modestbranding: 1, origin: location.origin },
+        events: {
+          onReady: function () { playerReady = true; },
+          onError: function () {
+            playerFailed = true;
+            el.videoStage.hidden = true;
+            el.sampleLabel.textContent = 'Nghe giọng trình duyệt';
+          },
+          onAutoplayBlocked: function () {
+            setStatus('Trình duyệt đang chặn audio', 'Bấm nút Play trên video một lần, sau đó dùng “Nghe audio gốc”.', false);
+          }
+        }
+      });
+    };
+    var tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.id = 'youtube-iframe-api';
+    document.head.appendChild(tag);
+  }
+
+  function startLesson(rawLesson) {
+    lesson = safeLesson(rawLesson);
+    if (!lesson) {
+      showConnectionError('Bài học không có câu hợp lệ để luyện.');
+      return;
+    }
+    clearTimeout(connectionTimer);
+    currentIndex = lesson.startIndex;
+    el.empty.hidden = true;
+    el.summary.hidden = true;
+    el.practice.hidden = false;
+    loadYouTubePlayer();
+    renderLine();
+  }
+
+  function showConnectionError(message) {
+    el.empty.hidden = false;
+    el.practice.hidden = true;
+    el.summary.hidden = true;
+    el.emptyEyebrow.textContent = 'Không nhận được bài học';
+    el.emptyTitle.textContent = message;
+    el.emptyHint.textContent = 'Quay lại English Lab, giữ tab đó mở và bấm “Mở phiên luyện nói” lần nữa.';
+  }
+
   window.addEventListener('message', function (event) {
-    if (event.origin !== returnOrigin) return;
+    if (event.origin !== returnOrigin || (window.opener && event.source !== window.opener)) return;
     var data = event.data || {};
-    if (data.type !== MESSAGE_ACCEPTED || data.session !== session) return;
-    el.sendStatus.textContent = 'English Lab đã nhận kết quả. Đang quay lại…';
-    window.setTimeout(function () { window.close(); }, 650);
+    if (data.session !== session) return;
+    if (data.type === MESSAGE_SESSION) {
+      startLesson(data.lesson);
+      return;
+    }
+    if (data.type === MESSAGE_ACCEPTED && results[data.index]) {
+      results[data.index].score = Number(data.score) || 0;
+      if (data.passed) passed[data.index] = true;
+      if (Number(data.index) === currentIndex && !el.result.hidden) {
+        renderResult(results[data.index]);
+        el.sendStatus.textContent = 'Đã đồng bộ với English Lab.';
+      }
+    }
   });
 
   el.record.addEventListener('click', startRecognition);
   el.retry.addEventListener('click', retry);
-  el.send.addEventListener('click', sendResult);
-  el.sample.addEventListener('click', speakSample);
+  el.nextResult.addEventListener('click', nextLine);
+  el.sample.addEventListener('click', playSample);
+  el.previous.addEventListener('click', previousLine);
+  el.next.addEventListener('click', nextLine);
+  el.retryMissed.addEventListener('click', retryMissed);
+  el.close.addEventListener('click', closeRoom);
+  el.speed.addEventListener('click', function () {
+    slow = !slow;
+    el.speed.setAttribute('aria-pressed', String(slow));
+  });
+  el.hide.addEventListener('click', function () {
+    hiddenText = !hiddenText;
+    el.hide.setAttribute('aria-pressed', String(hiddenText));
+    el.hide.textContent = hiddenText ? 'Hiện lời' : 'Ẩn lời';
+    el.scriptCard.classList.toggle('blind', hiddenText);
+  });
 
-  if (!target) {
-    el.empty.hidden = false;
+  el.empty.hidden = false;
+  if (session && returnOrigin && window.opener) {
+    sendToGas({ type: MESSAGE_READY });
+    connectionTimer = setTimeout(function () {
+      if (!lesson) showConnectionError('Kết nối với English Lab đã hết thời gian chờ.');
+    }, 6000);
+  } else if (params.get('target')) {
+    startLesson({
+      topic: params.get('lesson') || 'Bản thử',
+      videoId: params.get('videoId') || '',
+      startIndex: 0,
+      lines: [{
+        text: params.get('target'),
+        vi: params.get('translation') || '',
+        t: params.get('t') == null ? null : Number(params.get('t')),
+        end: params.get('end') == null ? null : Number(params.get('end'))
+      }]
+    });
   } else {
-    el.practice.hidden = false;
-    el.target.textContent = target;
-    el.lesson.textContent = params.get('lesson') || 'Shadowing';
-    var index = params.get('index');
-    var total = params.get('total');
-    el.progress.textContent = index && total ? 'Câu ' + index + ' / ' + total : 'Câu luyện';
-    if (translation) {
-      el.translation.textContent = translation;
-      el.translation.hidden = false;
-    }
-    if (window.opener && returnOrigin && session) {
-      window.opener.postMessage({ type: MESSAGE_READY, version: 1, session: session }, returnOrigin);
-    }
+    showConnectionError('Hãy mở phòng thu từ màn Shadowing.');
   }
 }());
