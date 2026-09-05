@@ -64,6 +64,14 @@ button { color: inherit; }
 .sample-controls { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .chip-button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 99px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 650; cursor: pointer; }
 .chip-button[aria-pressed="true"] { border-color: rgba(239, 209, 118, .42); background: rgba(239, 209, 118, .09); color: var(--amber); }
+.auto-advance-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 27px; padding: 4px 9px 4px 6px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 10px; font-weight: 650; cursor: pointer; user-select: none; transition: border-color .15s ease, background .15s ease, color .15s ease; }
+.auto-advance-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.auto-advance-toggle span { display: grid; place-items: center; width: 15px; height: 15px; border: 1px solid rgba(245, 240, 228, .28); border-radius: 50%; transition: border-color .15s ease, background .15s ease; }
+.auto-advance-toggle span::after { content: ""; width: 6px; height: 3px; border-left: 1.5px solid #231d0e; border-bottom: 1.5px solid #231d0e; transform: translateY(-1px) rotate(-45deg) scale(0); transition: transform .15s ease; }
+.auto-advance-toggle:has(input:checked) { border-color: rgba(239, 209, 118, .42); background: rgba(239, 209, 118, .09); color: var(--amber); }
+.auto-advance-toggle input:checked + span { border-color: var(--amber); background: var(--amber); }
+.auto-advance-toggle input:checked + span::after { transform: translateY(-1px) rotate(-45deg) scale(1); }
+.auto-advance-toggle:has(input:focus-visible) { outline: 2px solid var(--amber); outline-offset: 2px; }
 .script-card.blind h1 { color: transparent; text-shadow: 0 0 13px rgba(245, 240, 228, .45); user-select: none; }
 
 .recorder { display: grid; justify-items: center; padding: 42px 0 20px; text-align: center; }

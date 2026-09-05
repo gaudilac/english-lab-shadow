@@ -8,7 +8,8 @@ Trang luyện nói độc lập cho web app English Lab trên Google Apps Script
 2. Hai cửa sổ bắt tay bằng `postMessage`; GAS gửi toàn bộ bài gồm câu, bản dịch, `videoId` và timestamp.
 3. Speaking Room chạy trọn phiên nhiều câu, phát đúng đoạn video gốc bằng YouTube IFrame API và dùng Web Speech API để nhận dạng tiếng Anh.
 4. Sau khi chấm, các từ sai liền nhau được gộp thành cụm, hiện IPA ngay bên dưới và có thể nhấn để nghe riêng. IPA/audio ưu tiên dữ liệu Vocab và từ điển phía GAS; khi thiếu audio, trình duyệt dùng giọng tiếng Anh làm phương án dự phòng.
-5. Mỗi transcript được gửi ngầm về đúng cửa sổ English Lab. GAS kiểm tra origin + source + session, tự tính lại điểm và lưu tiến độ qua `google.script.run`.
+5. Tuỳ chọn **Tự qua câu ≥95%** mặc định bật và được nhớ trên thiết bị; người học có thể tắt để tự quyết định lúc chuyển câu.
+6. Mỗi transcript được gửi ngầm về đúng cửa sổ English Lab. GAS kiểm tra origin + source + session, tự tính lại điểm và lưu tiến độ qua `google.script.run`.
 
 Không có API key trong frontend. Trang không tải hoặc lưu file âm thanh trên GitHub.
 

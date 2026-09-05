@@ -9,6 +9,8 @@
   var MESSAGE_FINISH = 'english-lab-shadow-finish';
   var MESSAGE_LOOKUP = 'english-lab-shadow-pronunciation-lookup';
   var MESSAGE_PRONUNCIATIONS = 'english-lab-shadow-pronunciations';
+  var AUTO_ADVANCE_SCORE = .95;
+  var AUTO_ADVANCE_STORAGE = 'english-lab-shadow-auto-advance';
   var params = new URLSearchParams(location.hash.replace(/^#/, ''));
   var session = params.get('session') || '';
   var returnOrigin = validOrigin(params.get('returnOrigin'));
@@ -23,6 +25,7 @@
   var pronunciationRequest = 0;
   var pronunciationBatches = {};
   var pronunciationAudio = null;
+  var autoAdvance = true;
   var slow = false;
   var hiddenText = false;
   var player = null;
@@ -50,6 +53,7 @@
     sampleLabel: document.getElementById('sampleLabel'),
     speed: document.getElementById('speedButton'),
     hide: document.getElementById('hideButton'),
+    autoAdvance: document.getElementById('autoAdvanceToggle'),
     recorder: document.getElementById('recorder'),
     statusTitle: document.getElementById('statusTitle'),
     statusHint: document.getElementById('statusHint'),
@@ -73,6 +77,9 @@
     retryMissed: document.getElementById('retryMissedButton'),
     close: document.getElementById('closeButton')
   };
+
+  try { autoAdvance = localStorage.getItem(AUTO_ADVANCE_STORAGE) !== 'false'; } catch (e) {}
+  el.autoAdvance.checked = autoAdvance;
 
   function validOrigin(value) {
     if (!value) return '';
@@ -377,7 +384,7 @@
     el.sendStatus.textContent = sendToGas({ type: MESSAGE_RESULT, index: currentIndex, heard: heard, clientScore: result.score, createdAt: Date.now() })
       ? 'Đang đồng bộ tiến độ với English Lab…' : 'Kết quả đang được giữ trong phiên này.';
     renderResult(result);
-    if (result.score >= .8) {
+    if (autoAdvance && result.score >= AUTO_ADVANCE_SCORE) {
       clearTimeout(advanceTimer);
       advanceTimer = setTimeout(nextLine, 1300);
     }
@@ -610,6 +617,15 @@
     el.hide.setAttribute('aria-pressed', String(hiddenText));
     el.hide.textContent = hiddenText ? 'Hiện lời' : 'Ẩn lời';
     el.scriptCard.classList.toggle('blind', hiddenText);
+  });
+  el.autoAdvance.addEventListener('change', function () {
+    autoAdvance = el.autoAdvance.checked;
+    clearTimeout(advanceTimer);
+    try { localStorage.setItem(AUTO_ADVANCE_STORAGE, String(autoAdvance)); } catch (e) {}
+    var current = results[currentIndex];
+    if (autoAdvance && current && !el.result.hidden && current.score >= AUTO_ADVANCE_SCORE) {
+      advanceTimer = setTimeout(nextLine, 1300);
+    }
   });
 
   el.empty.hidden = false;
