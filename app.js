@@ -544,6 +544,15 @@
       player.seekTo(Math.max(0, line.t - .3), true);
       player.setPlaybackRate(slow ? .75 : 1);
       player.playVideo();
+      // iPhone thường chặn lệnh phát từ trang ngoài cho tới khi người dùng tự chạm ▶ trên khung video một lần
+      setTimeout(function () {
+        var st = -9;
+        try { st = player.getPlayerState(); } catch (e) {}
+        if (st !== 1 && st !== 3) {
+          setStatus('Video chưa phát được', 'Chạm nút ▶ ngay trên khung video một lần, rồi bấm “Nghe audio gốc” lại. (trạng thái video: ' + st + ')', false);
+          try { el.videoStage.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        }
+      }, 1500);
       if (line.end != null && line.end > line.t) {
         audioPoll = setInterval(function () {
           try { if (player.getCurrentTime() >= line.end) stopAudio(); }
