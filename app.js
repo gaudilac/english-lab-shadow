@@ -19,6 +19,7 @@
   var recognition = null;
   var recognitionFinished = false;
   var userStopped = false;
+  var samplePlayedAt = 0;   // chẩn đoán: iPhone có thể mất micro sau khi vừa phát audio mẫu
   var retryTimer = null;
   var results = {};
   var passed = {};
@@ -354,6 +355,11 @@
     userStopped = false;
     var startedAt = Date.now();
     var rec = recognition = new SpeechRecognition();
+    // Chẩn đoán: micro có mở không (audio), có thu được âm không (sound), có nhận ra giọng không (speech)
+    var got = { audio: false, sound: false, speech: false };
+    recognition.onaudiostart = function () { got.audio = true; };
+    recognition.onsoundstart = function () { got.sound = true; };
+    recognition.onspeechstart = function () { got.speech = true; };
     recognition.lang = 'en-US';
     recognition.continuous = false;
     // Safari/Chrome trên iPhone (cùng lõi WebKit) hay vứt kết quả cuối khi bấm dừng rồi báo lỗi "aborted".
@@ -395,8 +401,12 @@
       var hint = userStopped && event.error === 'aborted'
         ? 'Chưa nghe được chữ nào trước khi bạn bấm dừng. Đọc to, đọc hết câu rồi mới bấm dừng.'
         : errorMessage(event.error);
+      var mark = function (ok) { return ok ? '✓' : '✗'; };
+      var sinceSample = samplePlayedAt ? Math.round((startedAt - samplePlayedAt) / 1000) : -1;
       setStatus('Chưa ghi nhận được câu nói', hint + ' (mã lỗi: ' + event.error + ' · ' + secs.toFixed(1) + 's'
-        + (userStopped ? ' · đã bấm dừng' : '') + (attempt ? ' · đã thử lại' : '') + ')', false);
+        + (userStopped ? ' · đã bấm dừng' : '') + (attempt ? ' · đã thử lại' : '')
+        + ' · mic' + mark(got.audio) + ' âm' + mark(got.sound) + ' giọng' + mark(got.speech)
+        + (sinceSample >= 0 && sinceSample < 120 ? ' · phát mẫu ' + sinceSample + 's trước' : ' · chưa phát mẫu') + ')', false);
     };
     recognition.onend = function () {
       if (rec.dead) return;
@@ -509,6 +519,7 @@
 
   function speakWithBrowser() {
     if (!window.speechSynthesis) return;
+    samplePlayedAt = Date.now();
     var utterance = new SpeechSynthesisUtterance(currentLine().text);
     utterance.lang = 'en-US';
     utterance.rate = slow ? .68 : .92;
@@ -528,6 +539,7 @@
       setStatus('Audio gốc đang tải…', 'Đợi một chút rồi bấm nghe lại.', false);
       return;
     }
+    samplePlayedAt = Date.now();
     try {
       player.seekTo(Math.max(0, line.t - .3), true);
       player.setPlaybackRate(slow ? .75 : 1);
