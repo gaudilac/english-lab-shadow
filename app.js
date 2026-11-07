@@ -18,6 +18,8 @@
   var currentIndex = 0;
   var recognition = null;
   var recognitionFinished = false;
+  var userStopped = false;
+  var retryTimer = null;
   var results = {};
   var passed = {};
   var pronunciations = {};
@@ -317,10 +319,11 @@
       'no-speech': 'Chưa nghe thấy giọng nói. Hãy đưa micro gần hơn và thử lại.',
       'network': 'Dịch vụ nhận dạng đang mất kết nối. Hãy kiểm tra mạng và thử lại.'
     };
-    return messages[code] || 'Không thể nhận dạng giọng nói lúc này. Hãy thử lại. (mã lỗi: ' + code + ')';
+    return messages[code] || 'Không thể nhận dạng giọng nói lúc này. Hãy thử lại.';
   }
 
   function stopRecognition() {
+    clearTimeout(retryTimer);
     if (!recognition) return;
     recognitionFinished = true;
     try { recognition.abort(); } catch (e) {}
@@ -328,7 +331,9 @@
     el.recorder.classList.remove('listening');
   }
 
-  function startRecognition() {
+  function startRecognition(retry) {
+    var attempt = retry === true ? 1 : 0;   // lượt bấm nút truyền vào Event → 0
+    clearTimeout(retryTimer);
     var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!window.isSecureContext) {
       setStatus('Trang chưa chạy qua HTTPS', 'Micro chỉ hoạt động trên kết nối an toàn.', false);
@@ -340,12 +345,15 @@
       return;
     }
     if (recognition) {
+      userStopped = true;
       try { recognition.stop(); } catch (e) {}
       return;
     }
     stopAudio();
     recognitionFinished = false;
-    recognition = new SpeechRecognition();
+    userStopped = false;
+    var startedAt = Date.now();
+    var rec = recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
     recognition.continuous = false;
     // Safari/Chrome trên iPhone (cùng lõi WebKit) hay vứt kết quả cuối khi bấm dừng rồi báo lỗi "aborted".
@@ -354,7 +362,7 @@
     recognition.maxAlternatives = 1;
     var heardSoFar = '';
     var settle = function () {
-      if (recognitionFinished || !heardSoFar) return false;
+      if (rec.dead || recognitionFinished || !heardSoFar) return false;
       showResult(heardSoFar);
       return true;
     };
@@ -362,6 +370,7 @@
       setStatus('Đang nghe bạn nói…', 'Đọc hết câu, hệ thống sẽ tự chấm khi bạn dừng.', true);
     };
     recognition.onresult = function (event) {
+      if (rec.dead) return;
       var text = '', isFinal = true;
       for (var i = 0; i < event.results.length; i++) {
         text += String(event.results[i][0] && event.results[i][0].transcript || '');
@@ -372,13 +381,26 @@
       if (isFinal && heardSoFar && !recognitionFinished) showResult(heardSoFar);
     };
     recognition.onerror = function (event) {
-      if (settle()) return;
-      if (recognitionFinished) return;
+      if (rec.dead || settle() || recognitionFinished) return;
+      var secs = (Date.now() - startedAt) / 1000;
+      // iPhone hay huỷ lượt nghe ngay khi loa vừa phát audio mẫu → tự bật lại micro một lần
+      if (event.error === 'aborted' && !userStopped && !attempt && secs < 2) {
+        rec.dead = true;
+        if (recognition === rec) recognition = null;
+        setStatus('Đang bật lại micro…', 'Chờ một chút rồi đọc câu.', true);
+        retryTimer = setTimeout(function () { startRecognition(true); }, 500);
+        return;
+      }
       recognitionFinished = true;
-      setStatus('Chưa ghi nhận được câu nói', errorMessage(event.error), false);
+      var hint = userStopped && event.error === 'aborted'
+        ? 'Chưa nghe được chữ nào trước khi bạn bấm dừng. Đọc to, đọc hết câu rồi mới bấm dừng.'
+        : errorMessage(event.error);
+      setStatus('Chưa ghi nhận được câu nói', hint + ' (mã lỗi: ' + event.error + ' · ' + secs.toFixed(1) + 's'
+        + (userStopped ? ' · đã bấm dừng' : '') + (attempt ? ' · đã thử lại' : '') + ')', false);
     };
     recognition.onend = function () {
-      recognition = null;
+      if (rec.dead) return;
+      if (recognition === rec) recognition = null;
       if (settle()) return;
       if (!recognitionFinished) setStatus('Chưa nghe trọn câu', 'Bấm micro và đọc lại một lần nữa.', false);
     };
