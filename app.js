@@ -317,7 +317,7 @@
       'no-speech': 'Chưa nghe thấy giọng nói. Hãy đưa micro gần hơn và thử lại.',
       'network': 'Dịch vụ nhận dạng đang mất kết nối. Hãy kiểm tra mạng và thử lại.'
     };
-    return messages[code] || 'Không thể nhận dạng giọng nói lúc này. Hãy thử lại.';
+    return messages[code] || 'Không thể nhận dạng giọng nói lúc này. Hãy thử lại. (mã lỗi: ' + code + ')';
   }
 
   function stopRecognition() {
@@ -348,22 +348,38 @@
     recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
     recognition.continuous = false;
-    recognition.interimResults = false;
+    // Safari/Chrome trên iPhone (cùng lõi WebKit) hay vứt kết quả cuối khi bấm dừng rồi báo lỗi "aborted".
+    // Nhận cả chữ nghe được dọc đường, giữ bản dài nhất để vẫn chấm được khi trình duyệt huỷ.
+    recognition.interimResults = true;
     recognition.maxAlternatives = 1;
+    var heardSoFar = '';
+    var settle = function () {
+      if (recognitionFinished || !heardSoFar) return false;
+      showResult(heardSoFar);
+      return true;
+    };
     recognition.onstart = function () {
       setStatus('Đang nghe bạn nói…', 'Đọc hết câu, hệ thống sẽ tự chấm khi bạn dừng.', true);
     };
     recognition.onresult = function (event) {
-      var heard = event.results && event.results[0] && event.results[0][0]
-        ? String(event.results[0][0].transcript || '').trim() : '';
-      if (heard) showResult(heard);
+      var text = '', isFinal = true;
+      for (var i = 0; i < event.results.length; i++) {
+        text += String(event.results[i][0] && event.results[i][0].transcript || '');
+        if (!event.results[i].isFinal) isFinal = false;
+      }
+      text = text.trim();
+      if (text.length >= heardSoFar.length) heardSoFar = text;
+      if (isFinal && heardSoFar && !recognitionFinished) showResult(heardSoFar);
     };
     recognition.onerror = function (event) {
+      if (settle()) return;
+      if (recognitionFinished) return;
       recognitionFinished = true;
       setStatus('Chưa ghi nhận được câu nói', errorMessage(event.error), false);
     };
     recognition.onend = function () {
       recognition = null;
+      if (settle()) return;
       if (!recognitionFinished) setStatus('Chưa nghe trọn câu', 'Bấm micro và đọc lại một lần nữa.', false);
     };
     try {
